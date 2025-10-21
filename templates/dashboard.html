@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Banking System{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center pt-3 pb-2 mb-3 border-bottom">
+  <h1 class="h2"><i class="fas fa-tachometer-alt me-2"></i>Dashboard</h1>
+</div>
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="card card-stats h-100"><div class="card-body text-center">
+      <i class="fas fa-users fa-2x mb-2"></i>
+      <h3 class="mb-1">{{ stats.total_customers }}</h3>
+      <p class="mb-0">Total Customers</p>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card card-stats h-100"><div class="card-body text-center">
+      <i class="fas fa-money-bill-wave fa-2x mb-2"></i>
+      <h3 class="mb-1">{{ stats.active_loans }}</h3>
+      <p class="mb-0">Active Loans</p>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card card-stats h-100"><div class="card-body text-center">
+      <i class="fas fa-rupee-sign fa-2x mb-2"></i>
+      <h3 class="mb-1">₹{{ "{:,.0f}".format(stats.total_outstanding) }}</h3>
+      <p class="mb-0">Outstanding</p>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card card-stats h-100"><div class="card-body text-center">
+      <i class="fas fa-bell fa-2x mb-2"></i>
+      <h3 class="mb-1">{{ stats.active_fds + stats.active_rds }}</h3>
+      <p class="mb-0">Active Deposits</p>
+    </div></div>
+  </div>
+</div>
+<div class="card"><div class="card-header"><h5 class="mb-0"><i class="fas fa-clock me-2"></i>Recent Activities</h5></div>
+<div class="card-body">
+  {% if recent_activities %}
+    <div class="table-responsive">
+      <table class="table table-striped">
+        <thead><tr><th>Time</th><th>Operator</th><th>Action</th><th>Table</th><th>Record</th></tr></thead>
+        <tbody>
+          {% for a in recent_activities %}
+          <tr>
+            <td>{{ a.action_timestamp }}</td>
+            <td>{{ a.operator_name }}</td>
+            <td>{{ a.action_type }}</td>
+            <td>{{ a.table_name or '-' }}</td>
+            <td>{{ a.record_id or '-' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="text-muted mb-0">No recent activities.</p>
+  {% endif %}
+</div></div>
+{% endblock %}
