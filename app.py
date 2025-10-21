@@ -1,108 +1,207 @@
-# Reports backend routes (EMI monthly, renewals, CSV export)
+# Certificate routes: FD opening, RD opening, Loan completion (PDF) with admin-only regeneration
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import mm
 
-@app.route('/reports')
+import io
+
+
+def _generate_certificate_pdf(title, fields: dict):
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    # Header
+    c.setFont("Helvetica-Bold", 16)
+    c.drawCentredString(width/2, height-30*mm, "Sumanglam Multi State Society")
+    c.setFont("Helvetica", 12)
+    c.drawCentredString(width/2, height-38*mm, title)
+    # Body
+    y = height - 55*mm
+    c.setFont("Helvetica", 11)
+    for label, value in fields.items():
+        c.drawString(25*mm, y, f"{label}:")
+        c.drawString(80*mm, y, str(value))
+        y -= 10*mm
+    # Signatures
+    c.line(30*mm, 30*mm, 80*mm, 30*mm)
+    c.drawString(40*mm, 25*mm, "Secretary")
+    c.line(110*mm, 30*mm, 160*mm, 30*mm)
+    c.drawString(125*mm, 25*mm, "Director")
+    c.showPage()
+    c.save()
+    buffer.seek(0)
+    return buffer
+
+
+def _issue_certificate_number(prefix: str):
+    # Use timestamp + random suffix for uniqueness; in production, use a sequence table
+    return f"{prefix}-{int(datetime.now().timestamp())}"
+
+
+@app.route('/certificates/fd/<int:fd_id>/pdf')
 @require_login
-def reports():
-    now = datetime.now()
-    default_month = now.strftime('%Y-%m')
-    default_from = (now.replace(day=1)).strftime('%Y-%m-%d')
-    default_to = now.strftime('%Y-%m-%d')
-    return render_template('reports/index.html', default_month=default_month, default_from=default_from, default_to=default_to)
-
-@app.route('/reports/emis')
-@require_login
-def report_emis():
-    month = request.args.get('month')
-    if not month:
-        month = datetime.now().strftime('%Y-%m')
-    start = f"{month}-01"
-    # end of month: add one month then minus a day
-    start_dt = datetime.strptime(start, '%Y-%m-%d')
-    next_month = (start_dt.replace(day=28) + timedelta(days=4)).replace(day=1)
-    end_dt = next_month - timedelta(days=1)
-    end = end_dt.strftime('%Y-%m-%d')
-
+def cert_fd_open(fd_id):
     conn = get_db_connection()
-    rows = conn.execute('''
-        SELECT ep.*, c.full_name
-        FROM emi_payments ep 
-        JOIN loans l ON ep.loan_id = l.id
-        JOIN customers c ON l.customer_id = c.id
-        WHERE DATE(ep.payment_date) BETWEEN DATE(?) AND DATE(?)
-        ORDER BY ep.payment_date
-    ''', (start, end)).fetchall()
+    fd = conn.execute('SELECT * FROM fixed_deposits WHERE id=?', (fd_id,)).fetchone()
+    if not fd:
+        conn.close()
+        flash('FD not found', 'error')
+        return redirect(url_for('deposits'))
+    customer = conn.execute('SELECT full_name,aadhaar_number,address FROM customers WHERE id=?', (fd['customer_id'],)).fetchone()
+    # ensure certificate number exists
+    cert_no = fd['certificate_number'] or _issue_certificate_number('FD')
+    if not fd['certificate_number']:
+        conn.execute('UPDATE fixed_deposits SET certificate_number=? WHERE id=?', (cert_no, fd_id))
+        conn.commit()
+    # track certificate record
+    conn.execute('''INSERT OR IGNORE INTO certificates (certificate_number, certificate_type, customer_id, reference_id, generated_by)
+                    VALUES (?, 'fd_opening', ?, ?, ?)''', (cert_no, fd['customer_id'], fd_id, session['operator_id']))
+    conn.commit()
     conn.close()
 
-    month_label = start_dt.strftime('%B %Y')
-    return render_template('reports/emis.html', rows=rows, month_label=month_label)
+    fields = {
+        'Certificate No': cert_no,
+        'Customer Name': customer['full_name'],
+        'Aadhaar': customer['aadhaar_number'],
+        'Address': customer['address'],
+        'Deposit Amount': f"₹{fd['deposit_amount']:.2f}",
+        'Interest Rate': f"{fd['interest_rate']}%",
+        'Tenure': f"{fd['tenure_months']} months",
+        'Deposit Date': fd['deposit_date'],
+        'Maturity Date': fd['maturity_date']
+    }
+    pdf = _generate_certificate_pdf('Fixed Deposit Opening Certificate', fields)
+    return send_file(pdf, mimetype='application/pdf', as_attachment=True, download_name=f"FD_{cert_no}.pdf")
 
-@app.route('/reports/renewals')
+
+@app.route('/certificates/rd/<int:rd_id>/pdf')
 @require_login
-def report_renewals():
-    month = request.args.get('month')
-    if not month:
-        month = datetime.now().strftime('%Y-%m')
-    ref = datetime.strptime(f"{month}-01", '%Y-%m-%d')
-    start_next = (ref.replace(day=28) + timedelta(days=4)).replace(day=1)
-    end_next = (start_next.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
-
+def cert_rd_open(rd_id):
     conn = get_db_connection()
-    fds = conn.execute('''
-        SELECT fd.*, c.full_name
-        FROM fixed_deposits fd JOIN customers c ON fd.customer_id=c.id
-        WHERE DATE(fd.maturity_date) BETWEEN DATE(?) AND DATE(?)
-        ORDER BY fd.maturity_date
-    ''', (start_next.strftime('%Y-%m-%d'), end_next.strftime('%Y-%m-%d'))).fetchall()
-
-    rds = conn.execute('''
-        SELECT rd.*, c.full_name
-        FROM recurring_deposits rd JOIN customers c ON rd.customer_id=c.id
-        WHERE DATE(rd.maturity_date) BETWEEN DATE(?) AND DATE(?)
-        ORDER BY rd.maturity_date
-    ''', (start_next.strftime('%Y-%m-%d'), end_next.strftime('%Y-%m-%d'))).fetchall()
+    rd = conn.execute('SELECT * FROM recurring_deposits WHERE id=?', (rd_id,)).fetchone()
+    if not rd:
+        conn.close()
+        flash('RD not found', 'error')
+        return redirect(url_for('deposits'))
+    customer = conn.execute('SELECT full_name,aadhaar_number,address FROM customers WHERE id=?', (rd['customer_id'],)).fetchone()
+    cert_no = rd['certificate_number'] or _issue_certificate_number('RD')
+    if not rd['certificate_number']:
+        conn.execute('UPDATE recurring_deposits SET certificate_number=? WHERE id=?', (cert_no, rd_id))
+        conn.commit()
+    conn.execute('''INSERT OR IGNORE INTO certificates (certificate_number, certificate_type, customer_id, reference_id, generated_by)
+                    VALUES (?, 'rd_opening', ?, ?, ?)''', (cert_no, rd['customer_id'], rd_id, session['operator_id']))
+    conn.commit()
     conn.close()
 
-    return render_template('reports/renewals.html', fds=fds, rds=rds)
+    fields = {
+        'Certificate No': cert_no,
+        'Customer Name': customer['full_name'],
+        'Aadhaar': customer['aadhaar_number'],
+        'Address': customer['address'],
+        'Monthly Amount': f"₹{rd['monthly_amount']:.2f}",
+        'Interest Rate': f"{rd['interest_rate']}%",
+        'Tenure': f"{rd['tenure_months']} months",
+        'Start Date': rd['start_date'],
+        'Maturity Date': rd['maturity_date']
+    }
+    pdf = _generate_certificate_pdf('Recurring Deposit Opening Certificate', fields)
+    return send_file(pdf, mimetype='application/pdf', as_attachment=True, download_name=f"RD_{cert_no}.pdf")
 
-@app.route('/reports/export')
+
+@app.route('/certificates/loan/<int:loan_id>/completion/pdf')
 @require_login
-def export_transactions():
-    from_date = request.args.get('from') or datetime.now().strftime('%Y-%m-01')
-    to_date = request.args.get('to') or datetime.now().strftime('%Y-%m-%d')
+def cert_loan_completion(loan_id):
     conn = get_db_connection()
-    # Combine major transactional tables into one CSV: EMI payments + RD installments paid + FD opens + RD opens
-    # For simplicity, output a unified schema: date,type,reference_id,customer_id,amount,notes
+    loan = conn.execute('SELECT * FROM loans WHERE id=?', (loan_id,)).fetchone()
+    if not loan:
+        conn.close()
+        flash('Loan not found', 'error')
+        return redirect(url_for('loans'))
+    if loan['loan_status'] != 'completed':
+        conn.close()
+        flash('Loan is not completed yet', 'warning')
+        return redirect(url_for('loan_detail', loan_id=loan_id))
 
-    rows = []
-    # EMI payments
-    for r in conn.execute('''SELECT payment_date as date, 'EMI' as type, loan_id as ref_id, l.customer_id as customer_id, emi_amount as amount, 'EMI posted' as notes
-                             FROM emi_payments ep JOIN loans l ON ep.loan_id=l.id
-                             WHERE DATE(payment_date) BETWEEN DATE(?) AND DATE(?)''', (from_date, to_date)).fetchall():
-        rows.append(r)
-    # RD installments marked paid
-    for r in conn.execute('''SELECT payment_date as date, 'RD_INSTALLMENT' as type, rd_id as ref_id, rd.customer_id as customer_id, amount_paid as amount, payment_status as notes
-                             FROM rd_installments ri JOIN recurring_deposits rd ON ri.rd_id=rd.id
-                             WHERE payment_status='paid' AND DATE(payment_date) BETWEEN DATE(?) AND DATE(?)''', (from_date, to_date)).fetchall():
-        rows.append(r)
-    # FD opens
-    for r in conn.execute('''SELECT deposit_date as date, 'FD_OPEN' as type, id as ref_id, customer_id, deposit_amount as amount, certificate_number as notes
-                             FROM fixed_deposits WHERE DATE(deposit_date) BETWEEN DATE(?) AND DATE(?)''', (from_date, to_date)).fetchall():
-        rows.append(r)
-    # RD opens
-    for r in conn.execute('''SELECT start_date as date, 'RD_OPEN' as type, id as ref_id, customer_id, monthly_amount as amount, certificate_number as notes
-                             FROM recurring_deposits WHERE DATE(start_date) BETWEEN DATE(?) AND DATE(?)''', (from_date, to_date)).fetchall():
-        rows.append(r)
+    customer = conn.execute('SELECT full_name,aadhaar_number,address FROM customers WHERE id=?', (loan['customer_id'],)).fetchone()
+    cert_no = _issue_certificate_number('LN')
+    conn.execute('''INSERT INTO certificates (certificate_number, certificate_type, customer_id, reference_id, generated_by)
+                    VALUES (?, 'loan_completion', ?, ?, ?)''', (cert_no, loan['customer_id'], loan_id, session['operator_id']))
+    conn.commit()
     conn.close()
 
-    # Build CSV
-    import csv, io
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(['date','type','reference_id','customer_id','amount','notes'])
-    for r in rows:
-        writer.writerow([r['date'], r['type'], r['ref_id'], r['customer_id'], r['amount'], r['notes']])
-    output.seek(0)
+    fields = {
+        'Certificate No': cert_no,
+        'Customer Name': customer['full_name'],
+        'Aadhaar': customer['aadhaar_number'],
+        'Address': customer['address'],
+        'Loan Amount': f"₹{loan['loan_amount']:.2f}",
+        'Interest Rate': f"{loan['interest_rate']}%",
+        'Tenure': f"{loan['tenure_months']} months",
+        'Disbursement Date': loan['disbursement_date'],
+        'Completion Date': datetime.now().strftime('%Y-%m-%d')
+    }
+    pdf = _generate_certificate_pdf('Loan Completion Certificate', fields)
+    return send_file(pdf, mimetype='application/pdf', as_attachment=True, download_name=f"LN_{cert_no}.pdf")
 
-    from flask import Response
-    filename = f"transactions_{from_date}_to_{to_date}.csv"
-    return Response(output.getvalue(), mimetype='text/csv', headers={'Content-Disposition': f'attachment; filename={filename}'})
+
+# Admin-only regeneration
+@app.route('/certificates/<string:cert_no>/regenerate', methods=['POST'])
+@require_admin
+def cert_regenerate(cert_no):
+    conn = get_db_connection()
+    cert = conn.execute('SELECT * FROM certificates WHERE certificate_number=?', (cert_no,)).fetchone()
+    if not cert:
+        conn.close()
+        flash('Certificate not found', 'error')
+        return redirect(url_for('reports'))
+    customer = conn.execute('SELECT full_name,aadhaar_number,address FROM customers WHERE id=?', (cert['customer_id'],)).fetchone()
+
+    if cert['certificate_type'] == 'fd_opening':
+        ref = conn.execute('SELECT * FROM fixed_deposits WHERE id=?', (cert['reference_id'],)).fetchone()
+        fields = {
+            'Certificate No': cert_no,
+            'Customer Name': customer['full_name'],
+            'Aadhaar': customer['aadhaar_number'],
+            'Address': customer['address'],
+            'Deposit Amount': f"₹{ref['deposit_amount']:.2f}",
+            'Interest Rate': f"{ref['interest_rate']}%",
+            'Tenure': f"{ref['tenure_months']} months",
+            'Deposit Date': ref['deposit_date'],
+            'Maturity Date': ref['maturity_date']
+        }
+        title = 'Fixed Deposit Opening Certificate'
+        filename = f"FD_{cert_no}.pdf"
+    elif cert['certificate_type'] == 'rd_opening':
+        ref = conn.execute('SELECT * FROM recurring_deposits WHERE id=?', (cert['reference_id'],)).fetchone()
+        fields = {
+            'Certificate No': cert_no,
+            'Customer Name': customer['full_name'],
+            'Aadhaar': customer['aadhaar_number'],
+            'Address': customer['address'],
+            'Monthly Amount': f"₹{ref['monthly_amount']:.2f}",
+            'Interest Rate': f"{ref['interest_rate']}%",
+            'Tenure': f"{ref['tenure_months']} months",
+            'Start Date': ref['start_date'],
+            'Maturity Date': ref['maturity_date']
+        }
+        title = 'Recurring Deposit Opening Certificate'
+        filename = f"RD_{cert_no}.pdf"
+    else:
+        ref = conn.execute('SELECT * FROM loans WHERE id=?', (cert['reference_id'],)).fetchone()
+        fields = {
+            'Certificate No': cert_no,
+            'Customer Name': customer['full_name'],
+            'Aadhaar': customer['aadhaar_number'],
+            'Address': customer['address'],
+            'Loan Amount': f"₹{ref['loan_amount']:.2f}",
+            'Interest Rate': f"{ref['interest_rate']}%",
+            'Tenure': f"{ref['tenure_months']} months",
+            'Disbursement Date': ref['disbursement_date'],
+            'Completion Date': datetime.now().strftime('%Y-%m-%d')
+        }
+        title = 'Loan Completion Certificate'
+        filename = f"LN_{cert_no}.pdf"
+    conn.close()
+
+    pdf = _generate_certificate_pdf(title, fields)
+    return send_file(pdf, mimetype='application/pdf', as_attachment=True, download_name=filename)
