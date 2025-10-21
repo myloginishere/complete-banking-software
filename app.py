@@ -1,284 +1,120 @@
-#!/usr/bin/env python3
-"""
-Complete Banking Software Solution
-Created for Sumanglam Multi State Society
-Author: AI Assistant
-Version: 1.0
-"""
+# Loans backend routes for listing, creating, viewing, and EMI posting
+# Insert into app.py below existing imports and helper functions
 
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, send_file
-import sqlite3
-import hashlib
-import os
-from datetime import datetime, timedelta
-import calendar
-import math
-from functools import wraps
-import json
-import shutil
-import logging
+from datetime import date
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-app = Flask(__name__)
-app.secret_key = 'banking_system_secret_key_2024'  # Change this in production
-
-# Database configuration
-DATABASE = 'database/banking_system.db'
-
-def get_db_connection():
-    """Get database connection with row factory"""
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_database():
-    """Initialize database with schema and default data"""
-    conn = get_db_connection()
-    
-    # Read and execute schema
-    with open('database/schema.sql', 'r') as f:
-        schema = f.read()
-    
-    conn.executescript(schema)
-    
-    # Create default admin user
-    admin_password = hashlib.sha256('admin123'.encode()).hexdigest()
-    conn.execute(
-        'INSERT OR IGNORE INTO operators (username, password_hash, full_name, role) VALUES (?, ?, ?, ?)',
-        ('admin', admin_password, 'System Administrator', 'admin')
-    )
-    
-    # Insert default system configuration
-    default_configs = [
-        ('loan_interest_rate', '12.0', 'Default loan interest rate (%)'),
-        ('fd_interest_rate_1year', '8.0', 'FD interest rate for 1 year (%)'),
-        ('fd_interest_rate_2year', '8.5', 'FD interest rate for 2 years (%)'),
-        ('fd_interest_rate_3year', '9.0', 'FD interest rate for 3 years (%)'),
-        ('rd_interest_rate', '8.0', 'RD interest rate (%)'),
-        ('max_loan_tenure', '120', 'Maximum loan tenure in months'),
-        ('retirement_age', '58', 'Retirement age for loan calculations'),
-        ('max_emi_percentage', '50', 'Maximum EMI percentage of salary'),
-        ('loan_eligibility_multiplier', '36', 'Salary multiplier for loan eligibility'),
-        ('backup_time', '17:00', 'Daily backup time (24-hour format)')
-    ]
-    
-    for config_key, config_value, description in default_configs:
-        conn.execute(
-            'INSERT OR IGNORE INTO system_config (config_key, config_value, description) VALUES (?, ?, ?)',
-            (config_key, config_value, description)
-        )
-    
-    conn.commit()
-    conn.close()
-
-def require_login(f):
-    """Decorator to require login"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'operator_id' not in session:
-            flash('Please log in to access this page.', 'error')
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated_function
-
-def require_admin(f):
-    """Decorator to require admin privileges"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'operator_id' not in session:
-            flash('Please log in to access this page.', 'error')
-            return redirect(url_for('login'))
-        
-        conn = get_db_connection()
-        operator = conn.execute('SELECT role FROM operators WHERE id = ?', (session['operator_id'],)).fetchone()
-        conn.close()
-        
-        if not operator or operator['role'] != 'admin':
-            flash('Admin privileges required for this action.', 'error')
-            return redirect(url_for('dashboard'))
-        return f(*args, **kwargs)
-    return decorated_function
-
-def log_action(action_type, table_name=None, record_id=None, old_values=None, new_values=None):
-    """Log user actions for audit trail"""
-    if 'operator_id' not in session:
-        return
-    
-    conn = get_db_connection()
-    conn.execute(
-        """INSERT INTO audit_trail 
-           (operator_id, action_type, table_name, record_id, old_values, new_values, ip_address)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (session['operator_id'], action_type, table_name, record_id,
-         json.dumps(old_values) if old_values else None,
-         json.dumps(new_values) if new_values else None,
-         request.remote_addr)
-    )
-    conn.commit()
-    conn.close()
-
-def calculate_emi(principal, rate, tenure):
-    """Calculate EMI using standard banking formula"""
-    monthly_rate = rate / (12 * 100)
-    if monthly_rate == 0:
-        return principal / tenure
-    
-    emi = (principal * monthly_rate * pow(1 + monthly_rate, tenure)) / (pow(1 + monthly_rate, tenure) - 1)
-    return round(emi, 2)
-
-def calculate_age(birth_date):
-    """Calculate age from birth date"""
-    today = datetime.now().date()
-    if isinstance(birth_date, str):
-        birth_date = datetime.strptime(birth_date, '%Y-%m-%d').date()
-    
-    age = today.year - birth_date.year
-    if today.month < birth_date.month or (today.month == birth_date.month and today.day < birth_date.day):
-        age -= 1
-    return age
-
-def check_loan_eligibility(customer_id, requested_amount):
-    """Check loan eligibility based on salary and existing loans"""
-    conn = get_db_connection()
-    
-    # Get customer details
-    customer = conn.execute(
-        'SELECT monthly_salary, date_of_birth FROM customers WHERE id = ?',
-        (customer_id,)
-    ).fetchone()
-    
-    if not customer:
-        conn.close()
-        return False, "Customer not found"
-    
-    # Check age for retirement
-    age = calculate_age(customer['date_of_birth'])
-    retirement_age = int(conn.execute(
-        "SELECT config_value FROM system_config WHERE config_key = 'retirement_age'"
-    ).fetchone()['config_value'])
-    
-    if age >= retirement_age:
-        conn.close()
-        return False, "Customer has reached retirement age"
-    
-    # Get loan eligibility multiplier
-    multiplier = float(conn.execute(
-        "SELECT config_value FROM system_config WHERE config_key = 'loan_eligibility_multiplier'"
-    ).fetchone()['config_value'])
-    
-    max_eligible = customer['monthly_salary'] * multiplier
-    
-    # Check existing loans
-    existing_loans = conn.execute(
-        'SELECT SUM(total_outstanding) as total FROM loans WHERE customer_id = ? AND loan_status = "active"',
-        (customer_id,)
-    ).fetchone()
-    
-    existing_amount = existing_loans['total'] or 0
-    available_amount = max_eligible - existing_amount
-    
-    conn.close()
-    
-    if requested_amount > available_amount:
-        return False, f"Requested amount exceeds eligibility. Available: ₹{available_amount:,.2f}"
-    
-    return True, "Eligible"
-
-@app.route('/')
-def index():
-    """Home page - redirect to login if not authenticated"""
-    if 'operator_id' in session:
-        return redirect(url_for('dashboard'))
-    return redirect(url_for('login'))
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    """Login page"""
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        
-        # Hash password
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
-        
-        conn = get_db_connection()
-        operator = conn.execute(
-            'SELECT * FROM operators WHERE username = ? AND password_hash = ? AND is_active = 1',
-            (username, password_hash)
-        ).fetchone()
-        
-        if operator:
-            # Update last login
-            conn.execute('UPDATE operators SET last_login = CURRENT_TIMESTAMP WHERE id = ?', (operator['id'],))
-            conn.commit()
-            
-            # Set session
-            session['operator_id'] = operator['id']
-            session['operator_name'] = operator['full_name']
-            session['operator_role'] = operator['role']
-            
-            log_action('LOGIN')
-            flash(f'Welcome, {operator["full_name"]}!', 'success')
-            
-            conn.close()
-            return redirect(url_for('dashboard'))
-        else:
-            flash('Invalid username or password.', 'error')
-            conn.close()
-    
-    return render_template('login.html')
-
-@app.route('/logout')
-def logout():
-    """Logout and clear session"""
-    log_action('LOGOUT')
-    session.clear()
-    flash('You have been logged out successfully.', 'info')
-    return redirect(url_for('login'))
-
-@app.route('/dashboard')
+@app.route('/loans')
 @require_login
-def dashboard():
-    """Main dashboard"""
+def loans():
     conn = get_db_connection()
-    
-    # Get dashboard statistics
-    stats = {}
-    
-    # Total customers
-    stats['total_customers'] = conn.execute('SELECT COUNT(*) as count FROM customers WHERE is_active = 1').fetchone()['count']
-    
-    # Active loans
-    stats['active_loans'] = conn.execute('SELECT COUNT(*) as count FROM loans WHERE loan_status = "active"').fetchone()['count']
-    
-    # Total loan amount outstanding
-    outstanding_result = conn.execute('SELECT SUM(total_outstanding) as total FROM loans WHERE loan_status = "active"').fetchone()
-    stats['total_outstanding'] = outstanding_result['total'] or 0
-    
-    # Active FDs
-    stats['active_fds'] = conn.execute('SELECT COUNT(*) as count FROM fixed_deposits WHERE fd_status = "active"').fetchone()['count']
-    
-    # Active RDs  
-    stats['active_rds'] = conn.execute('SELECT COUNT(*) as count FROM recurring_deposits WHERE rd_status = "active"').fetchone()['count']
-    
-    # Recent activities (last 10 audit entries)
-    recent_activities = conn.execute(
-        """SELECT at.*, o.full_name as operator_name
-           FROM audit_trail at
-           JOIN operators o ON at.operator_id = o.id
-           ORDER BY at.action_timestamp DESC
-           LIMIT 10"""
-    ).fetchall()
-    
+    rows = conn.execute('''
+        SELECT l.*, c.full_name
+        FROM loans l JOIN customers c ON l.customer_id = c.id
+        ORDER BY l.created_date DESC
+    ''').fetchall()
     conn.close()
-    
-    return render_template('dashboard.html', stats=stats, recent_activities=recent_activities)
+    return render_template('loans/list.html', loans=rows)
 
-if __name__ == '__main__':
-    # Initialize database
-    os.makedirs('database', exist_ok=True)
-    init_database()
-    app.run(debug=True, host='0.0.0.0', port=5000)
+@app.route('/loans/add', methods=['GET', 'POST'])
+@require_login
+def add_loan():
+    conn = get_db_connection()
+    # defaults
+    default_interest = float(conn.execute("SELECT config_value FROM system_config WHERE config_key='loan_interest_rate'").fetchone()['config_value'])
+    today = datetime.now().date().strftime('%Y-%m-%d')
+
+    eligibility = None
+    if request.method == 'POST':
+        form = request.form
+        customer_id = int(form['customer_id'])
+        loan_amount = float(form['loan_amount'])
+        interest_rate = float(form['interest_rate'])
+        tenure_months = int(form['tenure_months'])
+        disbursement_date = form['disbursement_date']
+
+        # eligibility checks
+        ok, msg = check_loan_eligibility(customer_id, loan_amount)
+        if ok:
+            emi = calculate_emi(loan_amount, interest_rate, tenure_months)
+            # 50% salary EMI cap
+            cust = conn.execute('SELECT monthly_salary,date_of_birth FROM customers WHERE id=?', (customer_id,)).fetchone()
+            if cust:
+                if emi > 0.5 * cust['monthly_salary']:
+                    ok = False
+                    msg = f"EMI exceeds 50% of salary. Max allowed: ₹{0.5*cust['monthly_salary']:.2f}"
+            # retirement/tenure cap
+            retirement_age = int(conn.execute("SELECT config_value FROM system_config WHERE config_key='retirement_age'").fetchone()['config_value'])
+            age = calculate_age(cust['date_of_birth'])
+            remaining_years = max(0, retirement_age - age)
+            max_tenure = min(int(conn.execute("SELECT config_value FROM system_config WHERE config_key='max_loan_tenure'").fetchone()['config_value']), remaining_years*12)
+            if tenure_months > max_tenure:
+                ok = False
+                msg = f"Tenure exceeds limit. Max allowed: {max_tenure} months"
+        
+        if form.get('action') == 'check':
+            eligibility = {'ok': ok, 'message': msg, 'emi': calculate_emi(loan_amount, interest_rate, tenure_months) if ok else None}
+        else:
+            if not ok:
+                flash(msg, 'error')
+            else:
+                # create loan
+                maturity = datetime.strptime(disbursement_date, '%Y-%m-%d') + timedelta(days=30*tenure_months)
+                emi = calculate_emi(loan_amount, interest_rate, tenure_months)
+                cur = conn.execute('''
+                    INSERT INTO loans (customer_id, loan_amount, interest_rate, tenure_months, emi_amount, outstanding_principal, total_outstanding, loan_status, disbursement_date, maturity_date, created_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                ''', (customer_id, loan_amount, interest_rate, tenure_months, emi, loan_amount, loan_amount, disbursement_date, maturity.strftime('%Y-%m-%d'), session['operator_id']))
+                loan_id = cur.lastrowid
+                # guarantors
+                conn.execute('''INSERT INTO guarantors (customer_id, guarantor_name, guarantor_aadhaar, guarantor_address, guarantor_phone, relationship, guarantor_type)
+                                VALUES (?, ?, ?, ?, ?, ?, 1)''', (customer_id, form['g1_name'], form['g1_aadhaar'], form['g1_address'], form.get('g1_phone',''), 'Guarantor',))
+                conn.execute('''INSERT INTO guarantors (customer_id, guarantor_name, guarantor_aadhaar, guarantor_address, guarantor_phone, relationship, guarantor_type)
+                                VALUES (?, ?, ?, ?, ?, ?, 2)''', (customer_id, form['g2_name'], form['g2_aadhaar'], form['g2_address'], form.get('g2_phone',''), 'Guarantor',))
+                conn.commit()
+                log_action('CREATE_LOAN', 'loans', loan_id, None, {'customer_id': customer_id, 'amount': loan_amount})
+                conn.close()
+                flash('Loan created successfully', 'success')
+                return redirect(url_for('loan_detail', loan_id=loan_id))
+    conn.close()
+    return render_template('loans/add.html', default_interest=default_interest, today=today, eligibility=eligibility)
+
+@app.route('/loans/<int:loan_id>')
+@require_login
+def loan_detail(loan_id):
+    conn = get_db_connection()
+    loan = conn.execute('SELECT * FROM loans WHERE id=?', (loan_id,)).fetchone()
+    if not loan:
+        conn.close()
+        flash('Loan not found', 'error')
+        return redirect(url_for('loans'))
+    customer = conn.execute('SELECT * FROM customers WHERE id=?', (loan['customer_id'],)).fetchone()
+    guarantors = conn.execute('SELECT * FROM guarantors WHERE customer_id=? ORDER BY guarantor_type', (loan['customer_id'],)).fetchall()
+    payments = conn.execute('SELECT * FROM emi_payments WHERE loan_id=? ORDER BY payment_date', (loan_id,)).fetchall()
+    conn.close()
+    return render_template('loans/detail.html', loan=loan, customer=customer, guarantors=guarantors, payments=payments)
+
+@app.route('/loans/<int:loan_id>/collect-emi', methods=['POST'])
+@require_login
+def collect_emi(loan_id):
+    conn = get_db_connection()
+    loan = conn.execute('SELECT * FROM loans WHERE id=?', (loan_id,)).fetchone()
+    if not loan or loan['loan_status'] != 'active':
+        conn.close()
+        flash('Invalid loan state', 'error')
+        return redirect(url_for('loans'))
+    # compute monthly interest on outstanding principal
+    monthly_rate = float(loan['interest_rate'])/(12*100)
+    interest = round(loan['outstanding_principal'] * monthly_rate, 2)
+    principal = round(loan['emi_amount'] - interest, 2)
+    new_outstanding = max(0.0, float(loan['outstanding_principal']) - principal)
+
+    conn.execute('''INSERT INTO emi_payments (loan_id, payment_date, emi_amount, principal_amount, interest_amount, outstanding_after_payment, payment_status, collected_by)
+                    VALUES (?, DATE('now'), ?, ?, ?, ?, 'paid', ?)''', (loan_id, loan['emi_amount'], principal, interest, new_outstanding, session['operator_id']))
+    # update loan outstanding
+    new_status = 'completed' if new_outstanding <= 0.01 else 'active'
+    conn.execute('UPDATE loans SET outstanding_principal=?, total_outstanding=?, loan_status=? WHERE id=?', (new_outstanding, new_outstanding, new_status, loan_id))
+    conn.commit()
+    log_action('EMI_POST', 'emi_payments', loan_id, None, {'principal': principal, 'interest': interest})
+    conn.close()
+    flash('Monthly EMI posted successfully', 'success')
+    return redirect(url_for('loan_detail', loan_id=loan_id))
