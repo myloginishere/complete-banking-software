@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Admin - Banking System{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center pt-3 pb-2 mb-3 border-bottom">
+  <h1 class="h2"><i class="fas fa-user-cog me-2"></i>Admin</h1>
+</div>
+<div class="row g-3">
+  <div class="col-md-6">
+    <div class="card h-100"><div class="card-header"><strong>Operators</strong></div>
+      <div class="card-body">
+        <a href="{{ url_for('admin_operator_add') }}" class="btn btn-sm btn-primary mb-3"><i class="fas fa-user-plus me-2"></i>Add Operator</a>
+        <div class="table-responsive">
+          <table class="table table-striped"><thead><tr>
+            <th>Username</th><th>Name</th><th>Role</th><th>Status</th><th>Actions</th>
+          </tr></thead><tbody>
+            {% for o in operators %}
+            <tr>
+              <td>{{ o.username }}</td>
+              <td>{{ o.full_name }}</td>
+              <td><span class="badge bg-{{ 'danger' if o.role=='admin' else 'secondary' }}">{{ o.role }}</span></td>
+              <td>{{ 'Active' if o.is_active else 'Inactive' }}</td>
+              <td>
+                <a href="{{ url_for('admin_operator_edit', op_id=o.id) }}" class="btn btn-sm btn-outline-secondary">Edit</a>
+                {% if o.is_active %}
+                <form method="POST" action="{{ url_for('admin_operator_toggle', op_id=o.id) }}" class="d-inline">
+                  <button class="btn btn-sm btn-outline-warning" type="submit">Deactivate</button>
+                </form>
+                {% else %}
+                <form method="POST" action="{{ url_for('admin_operator_toggle', op_id=o.id) }}" class="d-inline">
+                  <button class="btn btn-sm btn-outline-success" type="submit">Activate</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card h-100"><div class="card-header"><strong>System Settings</strong></div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('admin_settings_save') }}">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Loan Rate (%)</label>
+              <input class="form-control" name="loan_interest_rate" value="{{ cfg.loan_interest_rate }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">RD Rate (%)</label>
+              <input class="form-control" name="rd_interest_rate" value="{{ cfg.rd_interest_rate }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">FD 1Y (%)</label>
+              <input class="form-control" name="fd_interest_rate_1year" value="{{ cfg.fd_interest_rate_1year }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">FD 2Y (%)</label>
+              <input class="form-control" name="fd_interest_rate_2year" value="{{ cfg.fd_interest_rate_2year }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">FD 3Y (%)</label>
+              <input class="form-control" name="fd_interest_rate_3year" value="{{ cfg.fd_interest_rate_3year }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Max Tenure (mo)</label>
+              <input class="form-control" name="max_loan_tenure" value="{{ cfg.max_loan_tenure }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Retirement Age</label>
+              <input class="form-control" name="retirement_age" value="{{ cfg.retirement_age }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Max EMI %</label>
+              <input class="form-control" name="max_emi_percentage" value="{{ cfg.max_emi_percentage }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Eligibility Multiplier</label>
+              <input class="form-control" name="loan_eligibility_multiplier" value="{{ cfg.loan_eligibility_multiplier }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Backup Time (HH:MM)</label>
+              <input class="form-control" name="backup_time" value="{{ cfg.backup_time }}">
+            </div>
+          </div>
+          <div class="mt-3">
+            <button class="btn btn-primary" type="submit">Save Settings</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card h-100"><div class="card-header"><strong>Backups Log</strong></div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('admin_backup_run') }}" class="mb-3">
+          <button class="btn btn-outline-primary" type="submit"><i class="fas fa-database me-2"></i>Run Manual Backup</button>
+        </form>
+        <div class="table-responsive">
+          <table class="table table-striped"><thead><tr>
+            <th>Time</th><th>File</th><th>Size</th><th>Type</th><th>Status</th>
+          </tr></thead><tbody>
+            {% for b in backups %}
+            <tr>
+              <td>{{ b.created_date }}</td>
+              <td>{{ b.backup_filename }}</td>
+              <td>{{ b.backup_size or '-' }}</td>
+              <td>{{ b.backup_type }}</td>
+              <td>{{ b.backup_status }}</td>
+            </tr>
+            {% endfor %}
+          </tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card h-100"><div class="card-header"><strong>Audit & Health</strong></div>
+      <div class="card-body">
+        <h6>Recent Audit Entries</h6>
+        <div class="table-responsive mb-3">
+          <table class="table table-striped"><thead><tr>
+            <th>Time</th><th>User</th><th>Action</th><th>Table</th>
+          </tr></thead><tbody>
+            {% for a in audits %}
+            <tr>
+              <td>{{ a.action_timestamp }}</td>
+              <td>{{ a.operator_name }}</td>
+              <td>{{ a.action_type }}</td>
+              <td>{{ a.table_name or '-' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody></table>
+        </div>
+        <h6>Health Checks</h6>
+        <ul class="mb-0">
+          <li>Database connectivity: {{ 'OK' if health.db_ok else 'ERROR' }}</li>
+          <li>Pending backups today: {{ health.pending_backups }}</li>
+          <li>Active operators: {{ health.active_operators }}</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
