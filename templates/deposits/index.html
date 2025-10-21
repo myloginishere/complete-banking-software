@@ -16,7 +16,7 @@
       <div class="table-responsive">
         <table class="table table-striped">
           <thead><tr>
-            <th>Acct</th><th>Name</th><th>Amount</th><th>Rate</th><th>Tenure</th><th>Maturity</th><th>Status</th>
+            <th>Acct</th><th>Name</th><th>Amount</th><th>Rate</th><th>Tenure</th><th>Maturity</th><th>Status</th><th>Certificate</th>
           </tr></thead>
           <tbody>
             {% for d in fds %}
@@ -30,6 +30,9 @@
               <td>
                 <span class="badge bg-{% if d.fd_status=='active' %}success{% elif d.fd_status=='matured' %}warning{% else %}secondary{% endif %}">{{ d.fd_status }}</span>
                 {% if d.renew_due %}<span class="badge bg-info ms-1">Renewal Due</span>{% endif %}
+              </td>
+              <td>
+                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('cert_fd_open', fd_id=d.id) }}"><i class="fas fa-file-pdf me-1"></i>PDF</a>
               </td>
             </tr>
             {% endfor %}
@@ -48,7 +51,7 @@
       <div class="table-responsive">
         <table class="table table-striped">
           <thead><tr>
-            <th>Acct</th><th>Name</th><th>Monthly</th><th>Rate</th><th>Tenure</th><th>Maturity</th><th>Status</th>
+            <th>Acct</th><th>Name</th><th>Monthly</th><th>Rate</th><th>Tenure</th><th>Maturity</th><th>Status</th><th>Certificate</th>
           </tr></thead>
           <tbody>
             {% for r in rds %}
@@ -62,6 +65,9 @@
               <td>
                 <span class="badge bg-{% if r.rd_status=='active' %}success{% elif r.rd_status=='completed' %}primary{% else %}secondary{% endif %}">{{ r.rd_status }}</span>
                 {% if r.overdue %}<span class="badge bg-danger ms-1">Overdue</span>{% endif %}
+              </td>
+              <td>
+                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('cert_rd_open', rd_id=r.id) }}"><i class="fas fa-file-pdf me-1"></i>PDF</a>
               </td>
             </tr>
             {% endfor %}
