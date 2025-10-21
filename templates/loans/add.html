@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}New Loan - Banking System{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center pt-3 pb-2 mb-3 border-bottom">
+  <h1 class="h2"><i class="fas fa-plus me-2"></i>New Loan</h1>
+  <a href="{{ url_for('loans') }}" class="btn btn-outline-secondary"><i class="fas fa-arrow-left me-2"></i>Back</a>
+</div>
+<div class="card"><div class="card-body">
+  <form method="POST">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Customer ID</label>
+        <input type="number" name="customer_id" class="form-control" required>
+        <div class="form-text">Enter existing customer ID</div>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Requested Amount (₹)</label>
+        <input type="number" step="0.01" name="loan_amount" class="form-control" required>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Annual Interest Rate (%)</label>
+        <input type="number" step="0.01" name="interest_rate" value="{{ default_interest or 12.0 }}" class="form-control" required>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Tenure (months)</label>
+        <input type="number" name="tenure_months" min="1" max="120" class="form-control" required>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Disbursement Date</label>
+        <input type="date" name="disbursement_date" value="{{ today }}" class="form-control" required>
+      </div>
+      <div class="col-12"><hr></div>
+      <div class="col-md-6">
+        <label class="form-label">Guarantor 1 Name</label>
+        <input type="text" name="g1_name" class="form-control" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Guarantor 1 Aadhaar</label>
+        <input type="text" name="g1_aadhaar" class="form-control" minlength="12" maxlength="12" pattern="\d{12}" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Guarantor 1 Address</label>
+        <input type="text" name="g1_address" class="form-control" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Guarantor 1 Phone</label>
+        <input type="text" name="g1_phone" class="form-control">
+      </div>
+      <div class="col-12"><hr></div>
+      <div class="col-md-6">
+        <label class="form-label">Guarantor 2 Name</label>
+        <input type="text" name="g2_name" class="form-control" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Guarantor 2 Aadhaar</label>
+        <input type="text" name="g2_aadhaar" class="form-control" minlength="12" maxlength="12" pattern="\d{12}" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Guarantor 2 Address</label>
+        <input type="text" name="g2_address" class="form-control" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Guarantor 2 Phone</label>
+        <input type="text" name="g2_phone" class="form-control">
+      </div>
+    </div>
+    <div class="mt-4 d-flex gap-2">
+      <button type="submit" name="action" value="check" class="btn btn-outline-primary"><i class="fas fa-check me-2"></i>Check Eligibility</button>
+      <button type="submit" name="action" value="create" class="btn btn-primary"><i class="fas fa-save me-2"></i>Create Loan</button>
+    </div>
+  </form>
+  {% if eligibility %}
+  <div class="alert alert-{{ 'success' if eligibility.ok else 'danger' }} mt-4">
+    {{ eligibility.message }}
+    {% if eligibility.emi %}<br><strong>Estimated EMI:</strong> ₹{{ "{:,.2f}".format(eligibility.emi) }}{% endif %}
+  </div>
+  {% endif %}
+</div></div>
+{% endblock %}
