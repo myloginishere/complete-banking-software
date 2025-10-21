@@ -1,9 +1,66 @@
-/* Basic theme */
-body { background:#f7f9fb; }
-.navbar-dark.bg-dark { background:#1f2937 !important; }
-.card { border-radius:10px; }
-.card-stats { background:linear-gradient(135deg,#2563eb,#1d4ed8); color:#fff; }
+/* Global layout tweaks */
+html, body { height:100%; }
+body { background:#f7f9fb; color:#1f2937; }
+.container-fluid { max-width: 1400px; }
+
+/* Navbar */
+.navbar-dark.bg-dark { background:#111827 !important; }
+.navbar-brand { letter-spacing:.3px; }
+
+/* Cards */
+.card { border-radius:12px; border:1px solid #e5e7eb; box-shadow: 0 2px 6px rgba(17,24,39,.04); }
+.card-header { background:#f9fafb; font-weight:600; }
+.card-stats { background:linear-gradient(135deg,#2563eb,#1d4ed8); color:#fff; border:none; }
+.card-stats .card-body { padding:1.25rem 1rem; }
+
+/* Buttons */
+.btn { border-radius:8px; }
 .btn-primary { background:#1d4ed8; border-color:#1d4ed8; }
 .btn-primary:hover { background:#1e40af; border-color:#1e40af; }
-.table th { white-space:nowrap; }
-.footer { background:#111827; color:#9ca3af; }
+.btn-outline-secondary { color:#374151; border-color:#d1d5db; }
+.btn-outline-secondary:hover { background:#f3f4f6; border-color:#9ca3af; }
+
+/* Tables */
+.table { font-size:.95rem; }
+.table th { background:#f3f4f6; color:#374151; font-weight:600; border-bottom:1px solid #e5e7eb; }
+.table td, .table th { vertical-align: middle; }
+.table-striped tbody tr:nth-of-type(odd) { background:#fafafa; }
+.table .badge { font-weight:500; }
+
+/* Forms */
+.form-label { font-weight:600; color:#374151; }
+.form-control, .form-select { border-radius:8px; border:1px solid #d1d5db; }
+.form-control:focus, .form-select:focus { border-color:#1d4ed8; box-shadow: 0 0 0 .2rem rgba(29,78,216,.15); }
+.form-text { color:#6b7280; }
+
+/* Alerts */
+.alert { border-radius:10px; border:1px solid #e5e7eb; }
+.alert-info { background:#eef2ff; color:#3730a3; border-color:#c7d2fe; }
+.alert-success { background:#ecfdf5; color:#065f46; border-color:#a7f3d0; }
+.alert-warning { background:#fffbeb; color:#92400e; border-color:#fde68a; }
+.alert-danger { background:#fef2f2; color:#991b1b; border-color:#fecaca; }
+
+/* Sidebar */
+.sidebar { background:#111827; }
+.sidebar .nav-link { color:#e5e7eb; }
+.sidebar .nav-link:hover { background:#1f2937; }
+.sidebar .nav-link.active { background:#1d4ed8; color:#fff; }
+
+/* Footer */
+.footer { background:#0b1020; color:#9ca3af; }
+
+/* Certificates (PDF preview styling hint classes) */
+.cert-preview { background:#fff; border:1px dashed #d1d5db; padding:1rem; border-radius:8px; }
+.cert-heading { font-weight:700; font-size:1.1rem; }
+.cert-field { display:flex; justify-content:space-between; padding:.25rem 0; border-bottom:1px dotted #e5e7eb; }
+.cert-field label { color:#6b7280; }
+
+/* Utilities */
+.text-muted { color:#6b7280 !important; }
+.badge-info { background:#0ea5e9; }
+.badge-warning { background:#f59e0b; }
+.badge-danger { background:#ef4444; }
+
+/* Responsive fix for 5-card row on dashboard */
+@media (min-width: 768px){ .col-md-2-4 { flex:0 0 20%; max-width:20%; } }
+@media (max-width: 767.98px){ .col-md-2-4 { flex:0 0 50%; max-width:50%; margin-bottom:1rem; } }
