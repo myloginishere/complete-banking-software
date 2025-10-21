@@ -1,207 +1,129 @@
-# Certificate routes: FD opening, RD opening, Loan completion (PDF) with admin-only regeneration
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from reportlab.lib.units import mm
+# Admin backend routes: operators, settings, backup, audit, health
 
-import io
-
-
-def _generate_certificate_pdf(title, fields: dict):
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
-    # Header
-    c.setFont("Helvetica-Bold", 16)
-    c.drawCentredString(width/2, height-30*mm, "Sumanglam Multi State Society")
-    c.setFont("Helvetica", 12)
-    c.drawCentredString(width/2, height-38*mm, title)
-    # Body
-    y = height - 55*mm
-    c.setFont("Helvetica", 11)
-    for label, value in fields.items():
-        c.drawString(25*mm, y, f"{label}:")
-        c.drawString(80*mm, y, str(value))
-        y -= 10*mm
-    # Signatures
-    c.line(30*mm, 30*mm, 80*mm, 30*mm)
-    c.drawString(40*mm, 25*mm, "Secretary")
-    c.line(110*mm, 30*mm, 160*mm, 30*mm)
-    c.drawString(125*mm, 25*mm, "Director")
-    c.showPage()
-    c.save()
-    buffer.seek(0)
-    return buffer
-
-
-def _issue_certificate_number(prefix: str):
-    # Use timestamp + random suffix for uniqueness; in production, use a sequence table
-    return f"{prefix}-{int(datetime.now().timestamp())}"
-
-
-@app.route('/certificates/fd/<int:fd_id>/pdf')
-@require_login
-def cert_fd_open(fd_id):
-    conn = get_db_connection()
-    fd = conn.execute('SELECT * FROM fixed_deposits WHERE id=?', (fd_id,)).fetchone()
-    if not fd:
-        conn.close()
-        flash('FD not found', 'error')
-        return redirect(url_for('deposits'))
-    customer = conn.execute('SELECT full_name,aadhaar_number,address FROM customers WHERE id=?', (fd['customer_id'],)).fetchone()
-    # ensure certificate number exists
-    cert_no = fd['certificate_number'] or _issue_certificate_number('FD')
-    if not fd['certificate_number']:
-        conn.execute('UPDATE fixed_deposits SET certificate_number=? WHERE id=?', (cert_no, fd_id))
-        conn.commit()
-    # track certificate record
-    conn.execute('''INSERT OR IGNORE INTO certificates (certificate_number, certificate_type, customer_id, reference_id, generated_by)
-                    VALUES (?, 'fd_opening', ?, ?, ?)''', (cert_no, fd['customer_id'], fd_id, session['operator_id']))
-    conn.commit()
-    conn.close()
-
-    fields = {
-        'Certificate No': cert_no,
-        'Customer Name': customer['full_name'],
-        'Aadhaar': customer['aadhaar_number'],
-        'Address': customer['address'],
-        'Deposit Amount': f"₹{fd['deposit_amount']:.2f}",
-        'Interest Rate': f"{fd['interest_rate']}%",
-        'Tenure': f"{fd['tenure_months']} months",
-        'Deposit Date': fd['deposit_date'],
-        'Maturity Date': fd['maturity_date']
-    }
-    pdf = _generate_certificate_pdf('Fixed Deposit Opening Certificate', fields)
-    return send_file(pdf, mimetype='application/pdf', as_attachment=True, download_name=f"FD_{cert_no}.pdf")
-
-
-@app.route('/certificates/rd/<int:rd_id>/pdf')
-@require_login
-def cert_rd_open(rd_id):
-    conn = get_db_connection()
-    rd = conn.execute('SELECT * FROM recurring_deposits WHERE id=?', (rd_id,)).fetchone()
-    if not rd:
-        conn.close()
-        flash('RD not found', 'error')
-        return redirect(url_for('deposits'))
-    customer = conn.execute('SELECT full_name,aadhaar_number,address FROM customers WHERE id=?', (rd['customer_id'],)).fetchone()
-    cert_no = rd['certificate_number'] or _issue_certificate_number('RD')
-    if not rd['certificate_number']:
-        conn.execute('UPDATE recurring_deposits SET certificate_number=? WHERE id=?', (cert_no, rd_id))
-        conn.commit()
-    conn.execute('''INSERT OR IGNORE INTO certificates (certificate_number, certificate_type, customer_id, reference_id, generated_by)
-                    VALUES (?, 'rd_opening', ?, ?, ?)''', (cert_no, rd['customer_id'], rd_id, session['operator_id']))
-    conn.commit()
-    conn.close()
-
-    fields = {
-        'Certificate No': cert_no,
-        'Customer Name': customer['full_name'],
-        'Aadhaar': customer['aadhaar_number'],
-        'Address': customer['address'],
-        'Monthly Amount': f"₹{rd['monthly_amount']:.2f}",
-        'Interest Rate': f"{rd['interest_rate']}%",
-        'Tenure': f"{rd['tenure_months']} months",
-        'Start Date': rd['start_date'],
-        'Maturity Date': rd['maturity_date']
-    }
-    pdf = _generate_certificate_pdf('Recurring Deposit Opening Certificate', fields)
-    return send_file(pdf, mimetype='application/pdf', as_attachment=True, download_name=f"RD_{cert_no}.pdf")
-
-
-@app.route('/certificates/loan/<int:loan_id>/completion/pdf')
-@require_login
-def cert_loan_completion(loan_id):
-    conn = get_db_connection()
-    loan = conn.execute('SELECT * FROM loans WHERE id=?', (loan_id,)).fetchone()
-    if not loan:
-        conn.close()
-        flash('Loan not found', 'error')
-        return redirect(url_for('loans'))
-    if loan['loan_status'] != 'completed':
-        conn.close()
-        flash('Loan is not completed yet', 'warning')
-        return redirect(url_for('loan_detail', loan_id=loan_id))
-
-    customer = conn.execute('SELECT full_name,aadhaar_number,address FROM customers WHERE id=?', (loan['customer_id'],)).fetchone()
-    cert_no = _issue_certificate_number('LN')
-    conn.execute('''INSERT INTO certificates (certificate_number, certificate_type, customer_id, reference_id, generated_by)
-                    VALUES (?, 'loan_completion', ?, ?, ?)''', (cert_no, loan['customer_id'], loan_id, session['operator_id']))
-    conn.commit()
-    conn.close()
-
-    fields = {
-        'Certificate No': cert_no,
-        'Customer Name': customer['full_name'],
-        'Aadhaar': customer['aadhaar_number'],
-        'Address': customer['address'],
-        'Loan Amount': f"₹{loan['loan_amount']:.2f}",
-        'Interest Rate': f"{loan['interest_rate']}%",
-        'Tenure': f"{loan['tenure_months']} months",
-        'Disbursement Date': loan['disbursement_date'],
-        'Completion Date': datetime.now().strftime('%Y-%m-%d')
-    }
-    pdf = _generate_certificate_pdf('Loan Completion Certificate', fields)
-    return send_file(pdf, mimetype='application/pdf', as_attachment=True, download_name=f"LN_{cert_no}.pdf")
-
-
-# Admin-only regeneration
-@app.route('/certificates/<string:cert_no>/regenerate', methods=['POST'])
+@app.route('/admin')
 @require_admin
-def cert_regenerate(cert_no):
+def admin_home():
     conn = get_db_connection()
-    cert = conn.execute('SELECT * FROM certificates WHERE certificate_number=?', (cert_no,)).fetchone()
-    if not cert:
-        conn.close()
-        flash('Certificate not found', 'error')
-        return redirect(url_for('reports'))
-    customer = conn.execute('SELECT full_name,aadhaar_number,address FROM customers WHERE id=?', (cert['customer_id'],)).fetchone()
-
-    if cert['certificate_type'] == 'fd_opening':
-        ref = conn.execute('SELECT * FROM fixed_deposits WHERE id=?', (cert['reference_id'],)).fetchone()
-        fields = {
-            'Certificate No': cert_no,
-            'Customer Name': customer['full_name'],
-            'Aadhaar': customer['aadhaar_number'],
-            'Address': customer['address'],
-            'Deposit Amount': f"₹{ref['deposit_amount']:.2f}",
-            'Interest Rate': f"{ref['interest_rate']}%",
-            'Tenure': f"{ref['tenure_months']} months",
-            'Deposit Date': ref['deposit_date'],
-            'Maturity Date': ref['maturity_date']
-        }
-        title = 'Fixed Deposit Opening Certificate'
-        filename = f"FD_{cert_no}.pdf"
-    elif cert['certificate_type'] == 'rd_opening':
-        ref = conn.execute('SELECT * FROM recurring_deposits WHERE id=?', (cert['reference_id'],)).fetchone()
-        fields = {
-            'Certificate No': cert_no,
-            'Customer Name': customer['full_name'],
-            'Aadhaar': customer['aadhaar_number'],
-            'Address': customer['address'],
-            'Monthly Amount': f"₹{ref['monthly_amount']:.2f}",
-            'Interest Rate': f"{ref['interest_rate']}%",
-            'Tenure': f"{ref['tenure_months']} months",
-            'Start Date': ref['start_date'],
-            'Maturity Date': ref['maturity_date']
-        }
-        title = 'Recurring Deposit Opening Certificate'
-        filename = f"RD_{cert_no}.pdf"
-    else:
-        ref = conn.execute('SELECT * FROM loans WHERE id=?', (cert['reference_id'],)).fetchone()
-        fields = {
-            'Certificate No': cert_no,
-            'Customer Name': customer['full_name'],
-            'Aadhaar': customer['aadhaar_number'],
-            'Address': customer['address'],
-            'Loan Amount': f"₹{ref['loan_amount']:.2f}",
-            'Interest Rate': f"{ref['interest_rate']}%",
-            'Tenure': f"{ref['tenure_months']} months",
-            'Disbursement Date': ref['disbursement_date'],
-            'Completion Date': datetime.now().strftime('%Y-%m-%d')
-        }
-        title = 'Loan Completion Certificate'
-        filename = f"LN_{cert_no}.pdf"
+    operators = conn.execute('SELECT * FROM operators ORDER BY created_date DESC').fetchall()
+    cfg_rows = conn.execute('SELECT config_key,config_value FROM system_config').fetchall()
+    backups = conn.execute('SELECT * FROM system_backups ORDER BY created_date DESC LIMIT 20').fetchall()
+    audits = conn.execute('''SELECT at.*, o.full_name as operator_name FROM audit_trail at 
+                              JOIN operators o ON at.operator_id=o.id
+                              ORDER BY action_timestamp DESC LIMIT 10''').fetchall()
+    # health
+    db_ok = True
+    try:
+        conn.execute('SELECT 1').fetchone()
+    except:
+        db_ok = False
+    active_operators = conn.execute('SELECT COUNT(*) as c FROM operators WHERE is_active=1').fetchone()['c']
     conn.close()
 
-    pdf = _generate_certificate_pdf(title, fields)
-    return send_file(pdf, mimetype='application/pdf', as_attachment=True, download_name=filename)
+    cfg = {r['config_key']: r['config_value'] for r in cfg_rows}
+    health = {
+        'db_ok': db_ok,
+        'pending_backups': 0,
+        'active_operators': active_operators
+    }
+    return render_template('admin/index.html', operators=operators, cfg=cfg, backups=backups, audits=audits, health=health)
+
+@app.route('/admin/operators/add', methods=['GET','POST'])
+@require_admin
+def admin_operator_add():
+    if request.method=='POST':
+        f = request.form
+        username = f['username']
+        password_hash = hashlib.sha256(f['password'].encode()).hexdigest()
+        full_name = f['full_name']
+        role = f.get('role','operator')
+        conn = get_db_connection()
+        conn.execute('INSERT INTO operators (username, password_hash, full_name, role, is_active) VALUES (?, ?, ?, ?, 1)',
+                     (username, password_hash, full_name, role))
+        conn.commit()
+        conn.close()
+        flash('Operator added', 'success')
+        return redirect(url_for('admin_home'))
+    return render_template_string('''{% extends "base.html" %}{% block content %}
+        <h3 class="mt-3">Add Operator</h3>
+        <form method="POST" class="card card-body mt-3">
+          <div class="row g-3">
+            <div class="col-md-4"><label class="form-label">Username</label><input class="form-control" name="username" required></div>
+            <div class="col-md-4"><label class="form-label">Password</label><input class="form-control" name="password" type="password" required></div>
+            <div class="col-md-4"><label class="form-label">Full Name</label><input class="form-control" name="full_name" required></div>
+            <div class="col-md-4"><label class="form-label">Role</label><select class="form-select" name="role"><option value="operator">operator</option><option value="admin">admin</option></select></div>
+          </div>
+          <div class="mt-3"><button class="btn btn-primary" type="submit">Save</button> <a href="{{ url_for('admin_home') }}" class="btn btn-outline-secondary">Cancel</a></div>
+        </form>
+      {% endblock %}''')
+
+@app.route('/admin/operators/<int:op_id>/edit', methods=['GET','POST'])
+@require_admin
+def admin_operator_edit(op_id):
+    conn = get_db_connection()
+    op = conn.execute('SELECT * FROM operators WHERE id=?', (op_id,)).fetchone()
+    if not op:
+        conn.close()
+        flash('Operator not found', 'error')
+        return redirect(url_for('admin_home'))
+    if request.method=='POST':
+        f = request.form
+        full_name = f['full_name']
+        role = f.get('role','operator')
+        is_active = 1 if f.get('is_active')=='on' else 0
+        conn.execute('UPDATE operators SET full_name=?, role=?, is_active=? WHERE id=?', (full_name, role, is_active, op_id))
+        conn.commit()
+        conn.close()
+        flash('Operator updated', 'success')
+        return redirect(url_for('admin_home'))
+    conn.close()
+    return render_template_string('''{% extends "base.html" %}{% block content %}
+        <h3 class="mt-3">Edit Operator</h3>
+        <form method="POST" class="card card-body mt-3">
+          <div class="row g-3">
+            <div class="col-md-4"><label class="form-label">Full Name</label><input class="form-control" name="full_name" value="{{ op.full_name }}" required></div>
+            <div class="col-md-4"><label class="form-label">Role</label><select class="form-select" name="role"><option value="operator" {% if op.role=='operator' %}selected{% endif %}>operator</option><option value="admin" {% if op.role=='admin' %}selected{% endif %}>admin</option></select></div>
+            <div class="col-md-4 form-check mt-4"><input class="form-check-input" type="checkbox" name="is_active" {% if op.is_active %}checked{% endif %}> <label class="form-check-label">Active</label></div>
+          </div>
+          <div class="mt-3"><button class="btn btn-primary" type="submit">Save</button> <a href="{{ url_for('admin_home') }}" class="btn btn-outline-secondary">Cancel</a></div>
+        </form>
+      {% endblock %}''', op=op)
+
+@app.route('/admin/operators/<int:op_id>/toggle', methods=['POST'])
+@require_admin
+def admin_operator_toggle(op_id):
+    conn = get_db_connection()
+    cur = conn.execute('SELECT is_active FROM operators WHERE id=?', (op_id,)).fetchone()
+    if cur:
+        new_state = 0 if cur['is_active'] else 1
+        conn.execute('UPDATE operators SET is_active=? WHERE id=?', (new_state, op_id))
+        conn.commit()
+    conn.close()
+    flash('Operator status updated', 'success')
+    return redirect(url_for('admin_home'))
+
+@app.route('/admin/settings/save', methods=['POST'])
+@require_admin
+def admin_settings_save():
+    conn = get_db_connection()
+    for k,v in request.form.items():
+        conn.execute('INSERT INTO system_config (config_key,config_value) VALUES (?,?) ON CONFLICT(config_key) DO UPDATE SET config_value=excluded.config_value, updated_date=CURRENT_TIMESTAMP', (k, v))
+    conn.commit()
+    conn.close()
+    flash('Settings saved', 'success')
+    return redirect(url_for('admin_home'))
+
+# Backup simulation daily at configured time and manual trigger
+@app.route('/admin/backup/run', methods=['POST'])
+@require_admin
+def admin_backup_run():
+    filename = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+    # simulate backup file in backups folder
+    os.makedirs('backups', exist_ok=True)
+    open(os.path.join('backups', filename), 'wb').close()
+    size = 0
+    conn = get_db_connection()
+    conn.execute('INSERT INTO system_backups (backup_filename, backup_size, backup_type, backup_status, created_by) VALUES (?, ?, '"manual"', '"completed"', ?)', (filename, size, session['operator_id']))
+    conn.commit()
+    conn.close()
+    flash('Backup completed', 'success')
+    return redirect(url_for('admin_home'))
